@@ -1,4 +1,8 @@
-use std::{collections::HashMap, io::Write};
+use std::{
+    io::Write,
+    thread::sleep,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 const HALF_BYTE: u32 = 4;
 const FULL_BYTE: u32 = 8;
@@ -6,6 +10,8 @@ const FULL_BYTE: u32 = 8;
 const VIDEO_WIDTH: usize = 64;
 const VIDEO_HEIGHT: usize = 32;
 const START_ADDRESS: u16 = 0x200;
+
+const INSTRUCTIONS_PER_SECOND: u64 = 700;
 
 pub struct Chip8 {
     mem: [u8; 4000],
@@ -111,7 +117,7 @@ impl Chip8 {
                     self.xannn(nnn);
                 }
                 (0xB, _, _, _) => self.xbnnn(nnn),
-                (0xC, _, _, _) => self.xcxnn(),
+                (0xC, _, _, _) => self.xcxnn(nibble_0, kk),
 
                 // Dxyn: DRW x, y, nibble
                 (0xD, _, _, _) => self.xdxyn(nibble_0, nibble_1, nibble_2),
@@ -131,6 +137,7 @@ impl Chip8 {
             if self.sound_timer > 0 {
                 self.sound_timer -= 1;
             }
+            sleep(Duration::from_secs(INSTRUCTIONS_PER_SECOND / 1000));
         }
     }
 
@@ -246,8 +253,13 @@ impl Chip8 {
         self.registers[0xF] = 0x80 & vy;
     }
 
-    pub fn xcxnn(&mut self) {
-        todo!("impl rng");
+    pub fn xcxnn(&mut self, x: u8, kk: u8) {
+        let nanoseconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos() as u8;
+
+        self.registers[x as usize] = nanoseconds & kk;
     }
 
     pub fn xbnnn(&mut self, nnn: u16) {
