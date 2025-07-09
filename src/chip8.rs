@@ -1,5 +1,5 @@
 use std::{
-    io::Write,
+    io::{Read, Write},
     thread::sleep,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -11,7 +11,9 @@ const VIDEO_WIDTH: usize = 64;
 const VIDEO_HEIGHT: usize = 32;
 const START_ADDRESS: u16 = 0x200;
 
-const INSTRUCTIONS_PER_SECOND: u64 = 700;
+const FONTSET_START_ADDRESS: u8 = 0x50;
+
+const DELAY: u64 = 4;
 
 pub struct Chip8 {
     mem: [u8; 4000],
@@ -23,6 +25,7 @@ pub struct Chip8 {
     delay_timer: u8,
     sound_timer: u8,
     registers: [u8; 16],
+    keypad: [u8; 16],
 }
 
 impl Chip8 {
@@ -46,6 +49,7 @@ impl Chip8 {
             delay_timer: 60,
             sound_timer: 60,
             registers: [0; 16],
+            keypad: [0; 16],
         }
     }
 
@@ -121,15 +125,28 @@ impl Chip8 {
 
                 // Dxyn: DRW x, y, nibble
                 (0xD, _, _, _) => self.xdxyn(nibble_0, nibble_1, nibble_2),
-                (0xE, _, 9, 0xE) => self.xex9e(),
+                (0xE, _, 9, 0xE) => self.xex9e(nibble_0),
+                (0xE, _, 0xA, 1) => self.xexa1(nibble_0),
                 (0xF, _, 1, 5) => self.xfx15(nibble_0),
                 (0xF, _, 0, 7) => self.xfx07(nibble_0),
                 (0xF, _, 1, 8) => self.xfx18(nibble_0),
+                (0xF, _, 1, 0xE) => self.xfx1e(nibble_0),
                 (0xF, _, 0, 0xA) => self.xfx0a(nibble_0),
+                (0xF, _, 5, 5) => self.xfx55(nibble_0),
+                (0xF, _, 6, 5) => self.xfx65(nibble_0),
+                (0xF, _, 3, 3) => self.xfx33(nibble_0),
+                (0xF, _, 2, 9) => self.xfx29(nibble_0),
 
                 // _ => println!("IMPLEMENT {}{}{}{}", nib_0, nib_1, nib_2, nib_3),
-                _ => todo!(),
+                _ => todo!(
+                    "{:?} {:?} {:?} {:?} NOT YET IMPLEMENTED!",
+                    char::from_digit(instruction_prefix as u32, 16),
+                    char::from_digit(nibble_0 as u32, 16),
+                    char::from_digit(nibble_1 as u32, 16),
+                    char::from_digit(nibble_2 as u32, 16),
+                ),
             }
+
             if self.delay_timer > 0 {
                 self.delay_timer -= 1;
             }
@@ -137,7 +154,7 @@ impl Chip8 {
             if self.sound_timer > 0 {
                 self.sound_timer -= 1;
             }
-            sleep(Duration::from_secs(INSTRUCTIONS_PER_SECOND / 1000));
+            sleep(Duration::from_millis(DELAY));
         }
     }
 
@@ -311,10 +328,72 @@ impl Chip8 {
     }
 
     pub fn xfx0a(&mut self, x: u8) {
-        todo!("take user input and store in vx");
+        let mut stdin_buf: [u8; 1] = [0; 1];
+        let mut stdin = std::io::stdin();
+        stdin.read_exact(&mut stdin_buf).unwrap();
+        let mapped_buf = u8::from_str_radix(
+            &char::from_u32(stdin_buf[0] as u32).unwrap().to_string(),
+            16,
+        )
+        .unwrap();
+
+        println!("recieved {}", mapped_buf);
+
+        self.registers[x as usize] = mapped_buf;
+        self.keypad[mapped_buf as usize] = 1;
     }
 
-    pub fn xex9e(&mut self) {}
+    pub fn xfx1e(&mut self, x: u8) {
+        let vx = self.registers[x as usize];
+        self.index_register += vx as u16;
+    }
+
+    pub fn xex9e(&mut self, x: u8) {
+        let vx = self.registers[x as usize];
+        if self.keypad[vx as usize] != 0 {
+            self.pc += 2;
+        }
+    }
+    pub fn xexa1(&mut self, x: u8) {
+        let vx = self.registers[x as usize];
+        if self.keypad[vx as usize] == 0 {
+            self.pc += 2;
+        }
+    }
+
+    pub fn xfx55(&mut self, x: u8) {
+        for index in 0..=x {
+            self.mem[self.index_register as usize + index as usize] =
+                self.registers[index as usize];
+        }
+
+        self.index_register += x as u16 + 1;
+    }
+
+    pub fn xfx33(&mut self, x: u8) {
+        let mut vx = self.registers[x as usize];
+        // 253
+        self.mem[self.index_register as usize + 2] = vx % 10;
+        vx /= 10;
+        self.mem[self.index_register as usize + 1] = vx % 10;
+        vx /= 10;
+        self.mem[self.index_register as usize] = vx % 10;
+    }
+
+    pub fn xfx65(&mut self, x: u8) {
+        for index in 0..=x {
+            self.registers[index as usize] =
+                self.mem[self.index_register as usize + index as usize];
+        }
+
+        self.index_register += x as u16 + 1;
+    }
+
+    pub fn xfx29(&mut self, x: u8) {
+        let vx = self.registers[x as usize];
+
+        self.index_register = (FONTSET_START_ADDRESS + (5 * vx)) as u16;
+    }
 
     pub fn xdxyn(&mut self, x: u8, y: u8, n: u8) {
         let x_pos = self.registers[x as usize] as usize % VIDEO_WIDTH;
