@@ -13,14 +13,13 @@ const START_ADDRESS: u16 = 0x200;
 
 const FONTSET_START_ADDRESS: u8 = 0x50;
 
-const DELAY: u64 = 4;
+const DELAY: u64 = 6;
 
 pub struct Chip8 {
     mem: [u8; 4000],
     display: [u8; VIDEO_HEIGHT * VIDEO_WIDTH],
     pc: u16,
     index_register: u16,
-    stack_pointer: u8,
     stack: Vec<u16>,
     delay_timer: u8,
     sound_timer: u8,
@@ -44,7 +43,6 @@ impl Chip8 {
             display: [0; VIDEO_HEIGHT * VIDEO_WIDTH],
             pc: START_ADDRESS,
             index_register: 0,
-            stack_pointer: 0,
             stack: vec![],
             delay_timer: 60,
             sound_timer: 60,
@@ -109,8 +107,8 @@ impl Chip8 {
                 (8, _, _, 7) => self.x8xy7(nibble_0, nibble_1),
                 (8, _, _, 0xE) => self.x8xye(nibble_0, nibble_1),
 
-                (3, _, _, _) => self.x3xnn(nibble_0, kk),
-                (4, _, _, _) => self.x4xnn(nibble_0, kk),
+                (3, _, _, _) => self.x3xkk(nibble_0, kk),
+                (4, _, _, _) => self.x4xkk(nibble_0, kk),
                 (5, _, _, 0) => self.x5xy0(nibble_0, nibble_1),
                 (9, _, _, 0) => self.x9xy0(nibble_0, nibble_1),
 
@@ -121,7 +119,7 @@ impl Chip8 {
                     self.xannn(nnn);
                 }
                 (0xB, _, _, _) => self.xbnnn(nnn),
-                (0xC, _, _, _) => self.xcxnn(nibble_0, kk),
+                (0xC, _, _, _) => self.xcxkk(nibble_0, kk),
 
                 // Dxyn: DRW x, y, nibble
                 (0xD, _, _, _) => self.xdxyn(nibble_0, nibble_1, nibble_2),
@@ -158,43 +156,51 @@ impl Chip8 {
         }
     }
 
+    // Return from subroutine
     pub fn x00ee(&mut self) {
-        self.stack_pointer -= 1;
-        self.pc = self.stack.get(self.stack_pointer as usize).unwrap().clone() as u16;
+        self.pc = self.stack.pop().unwrap();
     }
 
+    // Execute subroutine at addr nnn
     pub fn x2nnn(&mut self, nnn: u16) {
-        self.stack.insert(self.stack_pointer as usize, self.pc);
-        self.stack_pointer += 1;
+        // self.stack.insert(self.stack_pointer as usize, self.pc);
+        self.stack.push(self.pc);
         self.pc = nnn;
     }
 
+    // clear display
     pub fn x00e0(&mut self) {
         self.display = [0; VIDEO_WIDTH * VIDEO_HEIGHT];
     }
 
+    // JMP nnn
     pub fn x1nnn(&mut self, nnn: u16) {
         self.pc = nnn;
     }
 
+    // LD vx, kk
     pub fn x6xkk(&mut self, x: u8, kk: u8) {
         self.registers[x as usize] = kk;
     }
 
+    // ADD vx, kk, overflow wraps
     pub fn x7xkk(&mut self, x: u8, kk: u8) {
         let (sum, _) = self.registers[x as usize].overflowing_add(kk);
         self.registers[x as usize] = sum;
     }
 
+    // LD vx, vy
     pub fn x8xy0(&mut self, x: u8, y: u8) {
         self.registers[x as usize] = self.registers[y as usize];
     }
 
+    // ADD vx, vy, vf = carry
     pub fn x8xy4(&mut self, x: u8, y: u8) {
+        let vx = self.registers[x as usize];
+        let vy = self.registers[y as usize];
         self.registers[0xF] = 0;
 
-        let (sum, overflowed) =
-            self.registers[x as usize].overflowing_add(self.registers[y as usize]);
+        let (sum, overflowed) = vx.overflowing_add(vy);
 
         self.registers[x as usize] = sum;
 
@@ -203,6 +209,7 @@ impl Chip8 {
         }
     }
 
+    // SUB vx, vy, vf = !borrow
     pub fn x8xy5(&mut self, x: u8, y: u8) {
         self.registers[0xF] = 1;
         let vx = self.registers[x as usize];
@@ -216,6 +223,7 @@ impl Chip8 {
         }
     }
 
+    // SUB vy, vx, vf = !borrow
     pub fn x8xy7(&mut self, x: u8, y: u8) {
         self.registers[0xF] = 1;
         let vx = self.registers[x as usize];
@@ -229,6 +237,7 @@ impl Chip8 {
         }
     }
 
+    // AND vx, vy
     pub fn x8xy2(&mut self, x: u8, y: u8) {
         let vx = self.registers[x as usize];
         let vy = self.registers[y as usize];
@@ -236,6 +245,7 @@ impl Chip8 {
         self.registers[x as usize] = vx & vy;
     }
 
+    // OR vx, vy
     pub fn x8xy1(&mut self, x: u8, y: u8) {
         let vx = self.registers[x as usize];
         let vy = self.registers[y as usize];
@@ -243,6 +253,7 @@ impl Chip8 {
         self.registers[x as usize] = vx | vy;
     }
 
+    // XOR vx, vy
     pub fn x8xy3(&mut self, x: u8, y: u8) {
         let vx = self.registers[x as usize];
         let vy = self.registers[y as usize];
@@ -250,27 +261,29 @@ impl Chip8 {
         self.registers[x as usize] = vx ^ vy;
     }
 
+    // LD i, nnn
     pub fn xannn(&mut self, nnn: u16) {
         self.index_register = nnn;
     }
 
+    // SHR vx, vy, 1; vf = LSB
     pub fn x8xy6(&mut self, x: u8, y: u8) {
         let vy = self.registers[y as usize];
 
-        let shifted_vy = vy.wrapping_shr(1);
-        self.registers[x as usize] = shifted_vy;
         self.registers[0xF] = 0x01 & vy;
+        self.registers[x as usize] = vy >> 1;
     }
 
+    // SHL vx, vy, 1; vf = MSB
     pub fn x8xye(&mut self, x: u8, y: u8) {
         let vy = self.registers[y as usize];
 
-        let shifted_vy = vy.wrapping_shl(1);
-        self.registers[x as usize] = shifted_vy;
-        self.registers[0xF] = 0x80 & vy;
+        self.registers[0xF] = (0x80 & vy).reverse_bits();
+        self.registers[x as usize] = vy << 1;
     }
 
-    pub fn xcxnn(&mut self, x: u8, kk: u8) {
+    // RAND vx, kk
+    pub fn xcxkk(&mut self, x: u8, kk: u8) {
         let nanoseconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -279,16 +292,19 @@ impl Chip8 {
         self.registers[x as usize] = nanoseconds & kk;
     }
 
+    // JMP nnn + v0
     pub fn xbnnn(&mut self, nnn: u16) {
         self.pc = nnn + self.registers[0x0] as u16;
     }
 
-    pub fn x3xnn(&mut self, x: u8, kk: u8) {
+    // SKPE vx, nn
+    pub fn x3xkk(&mut self, x: u8, kk: u8) {
         if self.registers[x as usize] == kk {
             self.pc += 2;
         }
     }
 
+    // SKPE vx, nn
     pub fn x5xy0(&mut self, x: u8, y: u8) {
         let vx = self.registers[x as usize];
         let vy = self.registers[y as usize];
@@ -298,12 +314,14 @@ impl Chip8 {
         }
     }
 
-    pub fn x4xnn(&mut self, x: u8, kk: u8) {
+    // SKPNE vx, nn
+    pub fn x4xkk(&mut self, x: u8, kk: u8) {
         if self.registers[x as usize] != kk {
             self.pc += 2;
         }
     }
 
+    // SKPNE vx, vy
     pub fn x9xy0(&mut self, x: u8, y: u8) {
         let vx = self.registers[x as usize];
         let vy = self.registers[y as usize];
@@ -313,20 +331,24 @@ impl Chip8 {
         }
     }
 
+    // LD delay, vx
     pub fn xfx15(&mut self, x: u8) {
         let vx = self.registers[x as usize];
         self.delay_timer = vx;
     }
 
+    // LD vx, delay
     pub fn xfx07(&mut self, x: u8) {
         self.registers[x as usize] = self.delay_timer;
     }
 
+    // LD sound, vx
     pub fn xfx18(&mut self, x: u8) {
         let vx = self.registers[x as usize];
         self.sound_timer = vx;
     }
 
+    // LD vx, input
     pub fn xfx0a(&mut self, x: u8) {
         let mut stdin_buf: [u8; 1] = [0; 1];
         let mut stdin = std::io::stdin();
@@ -343,17 +365,21 @@ impl Chip8 {
         self.keypad[mapped_buf as usize] = 1;
     }
 
+    // ADD i, vx
     pub fn xfx1e(&mut self, x: u8) {
         let vx = self.registers[x as usize];
         self.index_register += vx as u16;
     }
 
+    // SKPE vx, key
     pub fn xex9e(&mut self, x: u8) {
         let vx = self.registers[x as usize];
         if self.keypad[vx as usize] != 0 {
             self.pc += 2;
         }
     }
+
+    // SKPNE vx, key
     pub fn xexa1(&mut self, x: u8) {
         let vx = self.registers[x as usize];
         if self.keypad[vx as usize] == 0 {
@@ -361,15 +387,17 @@ impl Chip8 {
         }
     }
 
+    // LD i-vx, v0-vx
     pub fn xfx55(&mut self, x: u8) {
         for index in 0..=x {
             self.mem[self.index_register as usize + index as usize] =
                 self.registers[index as usize];
         }
 
-        self.index_register += x as u16 + 1;
+        self.index_register += x as u16 + 1; // ?
     }
 
+    // LD decimal values of vx to i-i2
     pub fn xfx33(&mut self, x: u8) {
         let mut vx = self.registers[x as usize];
         // 253
@@ -380,21 +408,24 @@ impl Chip8 {
         self.mem[self.index_register as usize] = vx % 10;
     }
 
+    // LDv0-vx, i-vx
     pub fn xfx65(&mut self, x: u8) {
         for index in 0..=x {
             self.registers[index as usize] =
                 self.mem[self.index_register as usize + index as usize];
         }
 
-        self.index_register += x as u16 + 1;
+        self.index_register += x as u16 + 1; // ?
     }
 
+    // LD i, mem address f hex digit sprite
     pub fn xfx29(&mut self, x: u8) {
         let vx = self.registers[x as usize];
 
         self.index_register = (FONTSET_START_ADDRESS + (5 * vx)) as u16;
     }
 
+    // print screen
     pub fn xdxyn(&mut self, x: u8, y: u8, n: u8) {
         let x_pos = self.registers[x as usize] as usize % VIDEO_WIDTH;
         let y_pos = self.registers[y as usize] as usize % VIDEO_HEIGHT;
