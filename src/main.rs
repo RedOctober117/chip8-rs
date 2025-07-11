@@ -30,7 +30,7 @@ pub fn main() {
     emulator.fetch_decode_execute();
 }
 pub struct Renderer {
-    context: Sdl,
+    _context: Sdl,
     canvas: Canvas<Window>,
     event_pump: EventPump,
 }
@@ -67,7 +67,7 @@ impl Renderer {
             .unwrap();
 
         Self {
-            context: sdl_context,
+            _context: sdl_context,
             canvas,
             event_pump,
         }
@@ -76,6 +76,7 @@ impl Renderer {
     pub fn draw(&mut self, display: &[u8; VIDEO_HEIGHT * VIDEO_WIDTH], keypad: &mut [u8; 17]) {
         self.canvas.set_draw_color(Color::BLACK);
         self.canvas.clear();
+
         for event in self.event_pump.poll_iter() {
             match event {
                 Event::KeyDown {

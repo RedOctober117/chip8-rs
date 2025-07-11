@@ -1,4 +1,5 @@
 use std::{
+    io::Write,
     thread::sleep,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -88,11 +89,33 @@ impl Chip8 {
         &self.display
     }
 
+    fn debug_out(&self) {
+        let mut stdout = std::io::stdout();
+
+        println!("REGISTERS:");
+        let mut index = 0;
+        for register in self.registers {
+            print!("{}: {}", index, register);
+            if index < self.registers.len() {
+                print!(" | ");
+            }
+            index += 1;
+        }
+        stdout.flush().unwrap();
+
+        print!("PC: {} | ", self.pc);
+        print!("I: {} | ", self.index_register);
+        print!("Delay Timer: {} | ", self.delay_timer);
+        print!("Sound Timer: {}", self.sound_timer);
+        stdout.flush().unwrap();
+    }
+
     pub fn fetch_decode_execute(&mut self) {
         loop {
             if self.keypad[16] != 0 {
                 break;
             }
+
             let opcode = u16::from(self.mem[self.pc as usize]).wrapping_shl(FULL_BYTE)
                 | self.mem[self.pc as usize + 1] as u16;
 
