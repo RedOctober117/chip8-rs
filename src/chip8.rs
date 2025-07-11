@@ -1,16 +1,17 @@
 use std::{
-    io::Write,
     thread::sleep,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use crate::Renderer;
 
 // use tokio::sync::mpsc::{Receiver, Sender};
 
 const HALF_BYTE: u32 = 4;
 const FULL_BYTE: u32 = 8;
 
-const VIDEO_WIDTH: usize = 64;
-const VIDEO_HEIGHT: usize = 32;
+pub const VIDEO_WIDTH: usize = 64;
+pub const VIDEO_HEIGHT: usize = 32;
 const START_ADDRESS: u16 = 0x200;
 
 const FONTSET_START_ADDRESS: u8 = 0x50;
@@ -31,27 +32,10 @@ pub struct Chip8 {
     sound_timer: u8,
     registers: [u8; 16],
     keypad: [u8; 16],
-    // interrupt_downstream: Receiver<Interrupts>,s
+    renderer: Renderer,
 }
 
 impl Chip8 {
-    // pub async fn handle_interrupts(&mut self) {
-    //     while let Some(interrupt) = self.interrupt_downstream.recv().await {
-    //         match interrupt {
-    //             Interrupts::Keyboard(k) => {
-    //                 let converted_input =
-    //                     u8::from_str_radix(&char::from_u32(k as u32).unwrap().to_string(), 16)
-    //                         .unwrap();
-    //                 self.keypad[converted_input as usize] = 1;
-    //             }
-    //         }
-    //     }
-    // }
-
-    // pub async fn receive_interrupts(upstream: Sender<Interrupts>, stdin: std::io::Stdin) {
-    //     loop {}
-    // }
-
     pub fn load_program(&mut self, program: Vec<u8>) {
         let mut memory_index = START_ADDRESS as usize;
 
@@ -72,11 +56,15 @@ impl Chip8 {
             sound_timer: 60,
             registers: [0; 16],
             keypad: [0; 16],
-            // interrupt_downstream: downstream,
+            renderer: Renderer::init(),
         }
     }
 
-    pub fn fetch_decode_execute(mut self) {
+    pub fn get_display(&self) -> &[u8; VIDEO_HEIGHT * VIDEO_WIDTH] {
+        &self.display
+    }
+
+    pub fn fetch_decode_execute(&mut self) {
         loop {
             let opcode = u16::from(self.mem[self.pc as usize]).wrapping_shl(FULL_BYTE)
                 | self.mem[self.pc as usize + 1] as u16;
@@ -145,6 +133,9 @@ impl Chip8 {
             if self.sound_timer > 0 {
                 self.sound_timer -= 1;
             }
+            println!("{:?}", self.keypad);
+            self.renderer.draw(&self.display, &mut self.keypad);
+
             sleep(Duration::from_millis(DELAY));
         }
     }
@@ -343,9 +334,15 @@ impl Chip8 {
 
     // LD vx, input
     pub fn xfx0a(&mut self, x: u8) {
-        if self.keypad.contains(&1) {
-            self.registers[x as usize] = self.keypad.iter().find(|&&f| f == 1).unwrap().to_owned();
-        } else {
+        let mut found = false;
+        for index in 0..self.keypad.len() {
+            if self.keypad[index] != 0 {
+                self.registers[x as usize] = self.keypad[index];
+                found = true;
+            }
+        }
+
+        if !found {
             self.pc -= 2;
         }
     }
@@ -439,23 +436,5 @@ impl Chip8 {
                 }
             }
         }
-
-        let mut col = 0;
-        for pixel in self.display {
-            if col == VIDEO_WIDTH {
-                println!();
-                col = 0;
-            }
-            print!(
-                "{}",
-                match pixel {
-                    0 => "0",
-                    _ => "1",
-                }
-            );
-            col += 1;
-            std::io::stdout().flush().unwrap();
-        }
-        println!("\n");
     }
 }
