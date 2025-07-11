@@ -4,7 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::Renderer;
+use crate::renderer::Renderer;
 
 // use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -33,7 +33,6 @@ pub struct Chip8 {
     sound_timer: u8,
     registers: [u8; 16],
     keypad: [u8; 17],
-    renderer: Renderer,
 }
 
 impl Chip8 {
@@ -81,7 +80,6 @@ impl Chip8 {
             sound_timer: 60,
             registers: [0; 16],
             keypad: [0; 17],
-            renderer: Renderer::init(),
         }
     }
 
@@ -89,7 +87,7 @@ impl Chip8 {
         &self.display
     }
 
-    fn debug_out(&self) {
+    pub fn debug_out(&self) {
         let mut stdout = std::io::stdout();
 
         println!("REGISTERS:");
@@ -103,18 +101,35 @@ impl Chip8 {
         }
         stdout.flush().unwrap();
 
+        let opcode = u16::from(self.mem[self.pc as usize]).wrapping_shl(FULL_BYTE)
+            | self.mem[self.pc as usize + 1] as u16;
+
+        let instruction_prefix: u8 = (opcode & 0xF000).wrapping_shr(FULL_BYTE + HALF_BYTE) as u8;
+        let nibble_0: u8 = (opcode & 0x0F00).wrapping_shr(FULL_BYTE) as u8;
+        let nibble_1: u8 = (opcode & 0x00F0).wrapping_shr(HALF_BYTE) as u8;
+        let nibble_2: u8 = (opcode & 0x000F) as u8;
+
         print!("PC: {} | ", self.pc);
+        print!(
+            "Instruction: {:?} {:?} {:?} {:?} | ",
+            char::from_digit(instruction_prefix as u32, 16),
+            char::from_digit(nibble_0 as u32, 16),
+            char::from_digit(nibble_1 as u32, 16),
+            char::from_digit(nibble_2 as u32, 16),
+        );
         print!("I: {} | ", self.index_register);
         print!("Delay Timer: {} | ", self.delay_timer);
-        print!("Sound Timer: {}", self.sound_timer);
+        print!("Sound Timer: {}\n", self.sound_timer);
         stdout.flush().unwrap();
     }
 
-    pub fn fetch_decode_execute(&mut self) {
+    pub fn fetch_decode_execute(&mut self, mut renderer: Renderer) {
         loop {
             if self.keypad[16] != 0 {
                 break;
             }
+
+            self.debug_out();
 
             let opcode = u16::from(self.mem[self.pc as usize]).wrapping_shl(FULL_BYTE)
                 | self.mem[self.pc as usize + 1] as u16;
@@ -183,8 +198,8 @@ impl Chip8 {
             if self.sound_timer > 0 {
                 self.sound_timer -= 1;
             }
-            println!("{:?}", self.keypad);
-            self.renderer.draw(&self.display, &mut self.keypad);
+            // println!("{:?}", self.keypad);
+            renderer.draw(&self.display, &mut self.keypad);
 
             sleep(Duration::from_millis(DELAY));
         }
@@ -459,8 +474,8 @@ impl Chip8 {
 
     // print screen
     pub fn xdxyn(&mut self, x: u8, y: u8, n: u8) {
-        let x_pos = self.registers[x as usize] as usize % VIDEO_WIDTH;
-        let y_pos = self.registers[y as usize] as usize % VIDEO_HEIGHT;
+        let x_pos = self.registers[x as usize] as usize % 64;
+        let y_pos = self.registers[y as usize] as usize % 32;
         let height = n;
 
         self.registers[0xF] = 0;
@@ -472,18 +487,16 @@ impl Chip8 {
             for col in 0..8 {
                 let sprite_bit = sprite_byte & (0x80_u8 >> col);
 
-                let current_display_pointer =
-                    &mut self.display[(y_pos + row) * VIDEO_WIDTH + (x_pos + col)];
+                let current_pixel_pointer =
+                    &mut self.display[(y_pos + row) * VIDEO_WIDTH + (x_pos + col)]; //% (VIDEO_WIDTH * VIDEO_HEIGHT)];
 
-                let current_display_is_on = current_display_pointer.to_owned() != 0;
+                let current_pixel_is_on = current_pixel_pointer.to_owned() != 0;
 
                 if sprite_bit != 0 {
-                    *current_display_pointer ^= 0xFF;
-                    if current_display_is_on {
+                    if current_pixel_is_on {
                         self.registers[0xF] = 1;
-                    } else {
-                        self.registers[0xF] = 0;
                     }
+                    *current_pixel_pointer ^= 0x01;
                 }
             }
         }
