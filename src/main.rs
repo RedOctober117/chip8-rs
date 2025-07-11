@@ -16,7 +16,9 @@ use crate::chip8::{Chip8, VIDEO_HEIGHT, VIDEO_WIDTH};
 pub mod chip8;
 
 // const ROM: &str = "Tetris [Fran Dachille, 1991].ch8";
-const ROM: &str = "IBM Logo.ch8";
+// const ROM: &str = "IBM Logo.ch8";
+const ROM: &str = "tetris.ch8";
+// const ROM: &str = "SCTEST.CH8";
 // const ROM: &str = "test_opcode.ch8";
 // const ROM: &str = "Tank.ch8";
 
@@ -71,11 +73,17 @@ impl Renderer {
         }
     }
 
-    pub fn draw(&mut self, display: &[u8; VIDEO_HEIGHT * VIDEO_WIDTH], keypad: &mut [u8; 16]) {
+    pub fn draw(&mut self, display: &[u8; VIDEO_HEIGHT * VIDEO_WIDTH], keypad: &mut [u8; 17]) {
         self.canvas.set_draw_color(Color::BLACK);
         self.canvas.clear();
         for event in self.event_pump.poll_iter() {
             match event {
+                Event::KeyDown {
+                    keycode: Some(Keycode::ESCAPE),
+                    ..
+                } => {
+                    keypad[16] = 1;
+                }
                 Event::KeyUp {
                     keycode: Some(key), ..
                 }

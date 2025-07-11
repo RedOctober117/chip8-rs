@@ -31,14 +31,38 @@ pub struct Chip8 {
     delay_timer: u8,
     sound_timer: u8,
     registers: [u8; 16],
-    keypad: [u8; 16],
+    keypad: [u8; 17],
     renderer: Renderer,
 }
 
 impl Chip8 {
     pub fn load_program(&mut self, program: Vec<u8>) {
-        let mut memory_index = START_ADDRESS as usize;
+        let fonts = [
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+        ];
 
+        let mut memory_index = FONTSET_START_ADDRESS as usize;
+        for font in fonts {
+            self.mem[memory_index] = font;
+            memory_index += 1;
+        }
+
+        memory_index = START_ADDRESS as usize;
         for byte in program {
             self.mem[memory_index] = byte;
             memory_index += 1;
@@ -55,7 +79,7 @@ impl Chip8 {
             delay_timer: 60,
             sound_timer: 60,
             registers: [0; 16],
-            keypad: [0; 16],
+            keypad: [0; 17],
             renderer: Renderer::init(),
         }
     }
@@ -66,6 +90,9 @@ impl Chip8 {
 
     pub fn fetch_decode_execute(&mut self) {
         loop {
+            if self.keypad[16] != 0 {
+                break;
+            }
             let opcode = u16::from(self.mem[self.pc as usize]).wrapping_shl(FULL_BYTE)
                 | self.mem[self.pc as usize + 1] as u16;
 
@@ -429,10 +456,11 @@ impl Chip8 {
 
                 if sprite_bit != 0 {
                     *current_display_pointer ^= 0xFF;
-                }
-
-                if current_display_is_on {
-                    self.registers[0xF] = 1;
+                    if current_display_is_on {
+                        self.registers[0xF] = 1;
+                    } else {
+                        self.registers[0xF] = 0;
+                    }
                 }
             }
         }
