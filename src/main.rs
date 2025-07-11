@@ -45,6 +45,7 @@ impl Renderer {
                 PIXEL_SIZE * VIDEO_HEIGHT as u32,
             )
             .position_centered()
+            .resizable()
             .build()
             .unwrap();
 
