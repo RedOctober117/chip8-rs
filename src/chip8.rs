@@ -1,8 +1,10 @@
 use std::{
-    io::{Read, Write},
+    io::Write,
     thread::sleep,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+// use tokio::sync::mpsc::{Receiver, Sender};
 
 const HALF_BYTE: u32 = 4;
 const FULL_BYTE: u32 = 8;
@@ -15,6 +17,10 @@ const FONTSET_START_ADDRESS: u8 = 0x50;
 
 const DELAY: u64 = 6;
 
+pub enum Interrupts {
+    Keyboard(u8),
+}
+
 pub struct Chip8 {
     mem: [u8; 4000],
     display: [u8; VIDEO_HEIGHT * VIDEO_WIDTH],
@@ -25,9 +31,27 @@ pub struct Chip8 {
     sound_timer: u8,
     registers: [u8; 16],
     keypad: [u8; 16],
+    // interrupt_downstream: Receiver<Interrupts>,s
 }
 
 impl Chip8 {
+    // pub async fn handle_interrupts(&mut self) {
+    //     while let Some(interrupt) = self.interrupt_downstream.recv().await {
+    //         match interrupt {
+    //             Interrupts::Keyboard(k) => {
+    //                 let converted_input =
+    //                     u8::from_str_radix(&char::from_u32(k as u32).unwrap().to_string(), 16)
+    //                         .unwrap();
+    //                 self.keypad[converted_input as usize] = 1;
+    //             }
+    //         }
+    //     }
+    // }
+
+    // pub async fn receive_interrupts(upstream: Sender<Interrupts>, stdin: std::io::Stdin) {
+    //     loop {}
+    // }
+
     pub fn load_program(&mut self, program: Vec<u8>) {
         let mut memory_index = START_ADDRESS as usize;
 
@@ -48,6 +72,7 @@ impl Chip8 {
             sound_timer: 60,
             registers: [0; 16],
             keypad: [0; 16],
+            // interrupt_downstream: downstream,
         }
     }
 
@@ -70,34 +95,13 @@ impl Chip8 {
             self.pc += 2;
 
             match (instruction_prefix, nibble_0, nibble_1, nibble_2) {
-                // clear screen
-                (0, 0, 0xE, 0) => {
-                    // println!("clear screen");
-                    self.x00e0();
-                }
+                (0, 0, 0xE, 0) => self.x00e0(),
                 (0, 0, 0xE, 0xE) => self.x00ee(),
-                // 1nnn: JP addr
-                (1, _, _, _) => {
-                    // println!("jump");
-                    self.x1nnn(nnn);
-                }
+                (1, _, _, _) => self.x1nnn(nnn),
                 (2, _, _, _) => self.x2nnn(nnn),
-                // 6xkk: LD x, byte
-                (6, _, _, _) => {
-                    // println!("set vx");
-                    self.x6xkk(nibble_0, kk);
-                }
-
-                // 7xkk, ADD x, byte
-                (7, _, _, _) => {
-                    // println!("set nn to vx");
-                    self.x7xkk(nibble_0, kk);
-                }
-                // 8xy0: LD x, y
-                (8, _, _, 0) => {
-                    // println!("load y into x");
-                    self.x8xy0(nibble_0, nibble_1);
-                }
+                (6, _, _, _) => self.x6xkk(nibble_0, kk),
+                (7, _, _, _) => self.x7xkk(nibble_0, kk),
+                (8, _, _, 0) => self.x8xy0(nibble_0, nibble_1),
                 (8, _, _, 1) => self.x8xy1(nibble_0, nibble_1),
                 (8, _, _, 2) => self.x8xy2(nibble_0, nibble_1),
                 (8, _, _, 3) => self.x8xy3(nibble_0, nibble_1),
@@ -106,22 +110,13 @@ impl Chip8 {
                 (8, _, _, 6) => self.x8xy6(nibble_0, nibble_1),
                 (8, _, _, 7) => self.x8xy7(nibble_0, nibble_1),
                 (8, _, _, 0xE) => self.x8xye(nibble_0, nibble_1),
-
                 (3, _, _, _) => self.x3xkk(nibble_0, kk),
                 (4, _, _, _) => self.x4xkk(nibble_0, kk),
                 (5, _, _, 0) => self.x5xy0(nibble_0, nibble_1),
                 (9, _, _, 0) => self.x9xy0(nibble_0, nibble_1),
-
-                // Annn: LD I, addr
-                (0xA, _, _, _) =>
-                // println!("set index register");
-                {
-                    self.xannn(nnn);
-                }
+                (0xA, _, _, _) => self.xannn(nnn),
                 (0xB, _, _, _) => self.xbnnn(nnn),
                 (0xC, _, _, _) => self.xcxkk(nibble_0, kk),
-
-                // Dxyn: DRW x, y, nibble
                 (0xD, _, _, _) => self.xdxyn(nibble_0, nibble_1, nibble_2),
                 (0xE, _, 9, 0xE) => self.xex9e(nibble_0),
                 (0xE, _, 0xA, 1) => self.xexa1(nibble_0),
@@ -134,8 +129,6 @@ impl Chip8 {
                 (0xF, _, 6, 5) => self.xfx65(nibble_0),
                 (0xF, _, 3, 3) => self.xfx33(nibble_0),
                 (0xF, _, 2, 9) => self.xfx29(nibble_0),
-
-                // _ => println!("IMPLEMENT {}{}{}{}", nib_0, nib_1, nib_2, nib_3),
                 _ => todo!(
                     "{:?} {:?} {:?} {:?} NOT YET IMPLEMENTED!",
                     char::from_digit(instruction_prefix as u32, 16),
@@ -350,19 +343,11 @@ impl Chip8 {
 
     // LD vx, input
     pub fn xfx0a(&mut self, x: u8) {
-        let mut stdin_buf: [u8; 1] = [0; 1];
-        let mut stdin = std::io::stdin();
-        stdin.read_exact(&mut stdin_buf).unwrap();
-        let mapped_buf = u8::from_str_radix(
-            &char::from_u32(stdin_buf[0] as u32).unwrap().to_string(),
-            16,
-        )
-        .unwrap();
-
-        println!("recieved {}", mapped_buf);
-
-        self.registers[x as usize] = mapped_buf;
-        self.keypad[mapped_buf as usize] = 1;
+        if self.keypad.contains(&1) {
+            self.registers[x as usize] = self.keypad.iter().find(|&&f| f == 1).unwrap().to_owned();
+        } else {
+            self.pc -= 2;
+        }
     }
 
     // ADD i, vx
