@@ -1,23 +1,16 @@
 use std::{
     io::Write,
-    thread::sleep,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
-
-use crate::renderer::Renderer;
-
-// use tokio::sync::mpsc::{Receiver, Sender};
 
 const HALF_BYTE: u32 = 4;
 const FULL_BYTE: u32 = 8;
 
-pub const VIDEO_WIDTH: usize = 64;
-pub const VIDEO_HEIGHT: usize = 32;
+pub const DISPLAY_WIDTH: usize = 64;
+pub const DISPLAY_HEIGHT: usize = 32;
 const START_ADDRESS: u16 = 0x200;
 
 const FONTSET_START_ADDRESS: u8 = 0x50;
-
-const DELAY: u64 = 6;
 
 pub enum Interrupts {
     Keyboard(u8),
@@ -25,14 +18,14 @@ pub enum Interrupts {
 
 pub struct Chip8 {
     mem: [u8; 4000],
-    display: [u8; VIDEO_HEIGHT * VIDEO_WIDTH],
+    display: [u8; DISPLAY_HEIGHT * DISPLAY_WIDTH],
     pc: u16,
     index_register: u16,
     stack: Vec<u16>,
     delay_timer: u8,
     sound_timer: u8,
     registers: [u8; 16],
-    keypad: [u8; 17],
+    keypad: [u8; 16],
 }
 
 impl Chip8 {
@@ -72,19 +65,27 @@ impl Chip8 {
     pub fn new() -> Self {
         Self {
             mem: [0_u8; 4000],
-            display: [0; VIDEO_HEIGHT * VIDEO_WIDTH],
+            display: [0; DISPLAY_HEIGHT * DISPLAY_WIDTH],
             pc: START_ADDRESS,
             index_register: 0,
             stack: vec![],
             delay_timer: 60,
             sound_timer: 60,
             registers: [0; 16],
-            keypad: [0; 17],
+            keypad: [0; 16],
         }
     }
 
-    pub fn get_display(&self) -> &[u8; VIDEO_HEIGHT * VIDEO_WIDTH] {
+    pub fn get_display(&self) -> &[u8; DISPLAY_HEIGHT * DISPLAY_WIDTH] {
         &self.display
+    }
+
+    pub fn key_down(&mut self, key: u8) {
+        self.keypad[key as usize] = 1;
+    }
+
+    pub fn key_up(&mut self, key: u8) {
+        self.keypad[key as usize] = 0;
     }
 
     pub fn debug_out(&self) {
@@ -123,85 +124,72 @@ impl Chip8 {
         stdout.flush().unwrap();
     }
 
-    pub fn fetch_decode_execute(&mut self, mut renderer: Renderer) {
-        loop {
-            if self.keypad[16] != 0 {
-                break;
-            }
+    pub fn cycle(&mut self) {
+        let opcode = u16::from(self.mem[self.pc as usize]).wrapping_shl(FULL_BYTE)
+            | self.mem[self.pc as usize + 1] as u16;
 
-            self.debug_out();
+        let instruction_prefix: u8 = (opcode & 0xF000).wrapping_shr(FULL_BYTE + HALF_BYTE) as u8;
+        let nibble_0: u8 = (opcode & 0x0F00).wrapping_shr(FULL_BYTE) as u8;
+        let nibble_1: u8 = (opcode & 0x00F0).wrapping_shr(HALF_BYTE) as u8;
+        let nibble_2: u8 = (opcode & 0x000F) as u8;
 
-            let opcode = u16::from(self.mem[self.pc as usize]).wrapping_shl(FULL_BYTE)
-                | self.mem[self.pc as usize + 1] as u16;
+        let nnn: u16 = u16::from(nibble_0).wrapping_shl(FULL_BYTE)
+            | nibble_1.wrapping_shl(HALF_BYTE) as u16
+            | nibble_2 as u16;
+        let kk: u8 = nibble_1.wrapping_shl(HALF_BYTE) | nibble_2;
 
-            let instruction_prefix: u8 =
-                (opcode & 0xF000).wrapping_shr(FULL_BYTE + HALF_BYTE) as u8;
-            let nibble_0: u8 = (opcode & 0x0F00).wrapping_shr(FULL_BYTE) as u8;
-            let nibble_1: u8 = (opcode & 0x00F0).wrapping_shr(HALF_BYTE) as u8;
-            let nibble_2: u8 = (opcode & 0x000F) as u8;
+        self.pc += 2;
 
-            let nnn: u16 = u16::from(nibble_0).wrapping_shl(FULL_BYTE)
-                | nibble_1.wrapping_shl(HALF_BYTE) as u16
-                | nibble_2 as u16;
-            let kk: u8 = nibble_1.wrapping_shl(HALF_BYTE) | nibble_2;
+        match (instruction_prefix, nibble_0, nibble_1, nibble_2) {
+            (0, 0, 0xE, 0) => self.x00e0(),
+            (0, 0, 0xE, 0xE) => self.x00ee(),
+            (1, _, _, _) => self.x1nnn(nnn),
+            (2, _, _, _) => self.x2nnn(nnn),
+            (6, _, _, _) => self.x6xkk(nibble_0, kk),
+            (7, _, _, _) => self.x7xkk(nibble_0, kk),
+            (8, _, _, 0) => self.x8xy0(nibble_0, nibble_1),
+            (8, _, _, 1) => self.x8xy1(nibble_0, nibble_1),
+            (8, _, _, 2) => self.x8xy2(nibble_0, nibble_1),
+            (8, _, _, 3) => self.x8xy3(nibble_0, nibble_1),
+            (8, _, _, 4) => self.x8xy4(nibble_0, nibble_1),
+            (8, _, _, 5) => self.x8xy5(nibble_0, nibble_1),
+            (8, _, _, 6) => self.x8xy6(nibble_0, nibble_1),
+            (8, _, _, 7) => self.x8xy7(nibble_0, nibble_1),
+            (8, _, _, 0xE) => self.x8xye(nibble_0, nibble_1),
+            (3, _, _, _) => self.x3xkk(nibble_0, kk),
+            (4, _, _, _) => self.x4xkk(nibble_0, kk),
+            (5, _, _, 0) => self.x5xy0(nibble_0, nibble_1),
+            (9, _, _, 0) => self.x9xy0(nibble_0, nibble_1),
+            (0xA, _, _, _) => self.xannn(nnn),
+            (0xB, _, _, _) => self.xbnnn(nnn),
+            (0xC, _, _, _) => self.xcxkk(nibble_0, kk),
+            (0xD, _, _, _) => self.xdxyn(nibble_0, nibble_1, nibble_2),
+            (0xE, _, 9, 0xE) => self.xex9e(nibble_0),
+            (0xE, _, 0xA, 1) => self.xexa1(nibble_0),
+            (0xF, _, 1, 5) => self.xfx15(nibble_0),
+            (0xF, _, 0, 7) => self.xfx07(nibble_0),
+            (0xF, _, 1, 8) => self.xfx18(nibble_0),
+            (0xF, _, 1, 0xE) => self.xfx1e(nibble_0),
+            (0xF, _, 0, 0xA) => self.xfx0a(nibble_0),
+            (0xF, _, 5, 5) => self.xfx55(nibble_0),
+            (0xF, _, 6, 5) => self.xfx65(nibble_0),
+            (0xF, _, 3, 3) => self.xfx33(nibble_0),
+            (0xF, _, 2, 9) => self.xfx29(nibble_0),
+            _ => todo!(
+                "{:?} {:?} {:?} {:?} NOT YET IMPLEMENTED!",
+                char::from_digit(instruction_prefix as u32, 16),
+                char::from_digit(nibble_0 as u32, 16),
+                char::from_digit(nibble_1 as u32, 16),
+                char::from_digit(nibble_2 as u32, 16),
+            ),
+        }
 
-            self.pc += 2;
+        if self.delay_timer > 0 {
+            self.delay_timer -= 1;
+        }
 
-            match (instruction_prefix, nibble_0, nibble_1, nibble_2) {
-                (0, 0, 0xE, 0) => self.x00e0(),
-                (0, 0, 0xE, 0xE) => self.x00ee(),
-                (1, _, _, _) => self.x1nnn(nnn),
-                (2, _, _, _) => self.x2nnn(nnn),
-                (6, _, _, _) => self.x6xkk(nibble_0, kk),
-                (7, _, _, _) => self.x7xkk(nibble_0, kk),
-                (8, _, _, 0) => self.x8xy0(nibble_0, nibble_1),
-                (8, _, _, 1) => self.x8xy1(nibble_0, nibble_1),
-                (8, _, _, 2) => self.x8xy2(nibble_0, nibble_1),
-                (8, _, _, 3) => self.x8xy3(nibble_0, nibble_1),
-                (8, _, _, 4) => self.x8xy4(nibble_0, nibble_1),
-                (8, _, _, 5) => self.x8xy5(nibble_0, nibble_1),
-                (8, _, _, 6) => self.x8xy6(nibble_0, nibble_1),
-                (8, _, _, 7) => self.x8xy7(nibble_0, nibble_1),
-                (8, _, _, 0xE) => self.x8xye(nibble_0, nibble_1),
-                (3, _, _, _) => self.x3xkk(nibble_0, kk),
-                (4, _, _, _) => self.x4xkk(nibble_0, kk),
-                (5, _, _, 0) => self.x5xy0(nibble_0, nibble_1),
-                (9, _, _, 0) => self.x9xy0(nibble_0, nibble_1),
-                (0xA, _, _, _) => self.xannn(nnn),
-                (0xB, _, _, _) => self.xbnnn(nnn),
-                (0xC, _, _, _) => self.xcxkk(nibble_0, kk),
-                (0xD, _, _, _) => self.xdxyn(nibble_0, nibble_1, nibble_2),
-                (0xE, _, 9, 0xE) => self.xex9e(nibble_0),
-                (0xE, _, 0xA, 1) => self.xexa1(nibble_0),
-                (0xF, _, 1, 5) => self.xfx15(nibble_0),
-                (0xF, _, 0, 7) => self.xfx07(nibble_0),
-                (0xF, _, 1, 8) => self.xfx18(nibble_0),
-                (0xF, _, 1, 0xE) => self.xfx1e(nibble_0),
-                (0xF, _, 0, 0xA) => self.xfx0a(nibble_0),
-                (0xF, _, 5, 5) => self.xfx55(nibble_0),
-                (0xF, _, 6, 5) => self.xfx65(nibble_0),
-                (0xF, _, 3, 3) => self.xfx33(nibble_0),
-                (0xF, _, 2, 9) => self.xfx29(nibble_0),
-                _ => todo!(
-                    "{:?} {:?} {:?} {:?} NOT YET IMPLEMENTED!",
-                    char::from_digit(instruction_prefix as u32, 16),
-                    char::from_digit(nibble_0 as u32, 16),
-                    char::from_digit(nibble_1 as u32, 16),
-                    char::from_digit(nibble_2 as u32, 16),
-                ),
-            }
-
-            if self.delay_timer > 0 {
-                self.delay_timer -= 1;
-            }
-
-            if self.sound_timer > 0 {
-                self.sound_timer -= 1;
-            }
-            // println!("{:?}", self.keypad);
-            renderer.draw(&self.display, &mut self.keypad);
-
-            sleep(Duration::from_millis(DELAY));
+        if self.sound_timer > 0 {
+            self.sound_timer -= 1;
         }
     }
 
@@ -219,7 +207,7 @@ impl Chip8 {
 
     // clear display
     pub fn x00e0(&mut self) {
-        self.display = [0; VIDEO_WIDTH * VIDEO_HEIGHT];
+        self.display = [0; DISPLAY_WIDTH * DISPLAY_HEIGHT];
     }
 
     // JMP nnn
@@ -292,6 +280,7 @@ impl Chip8 {
         let vy = self.registers[y as usize];
 
         self.registers[x as usize] = vx & vy;
+        self.registers[0xF] = 0;
     }
 
     // OR vx, vy
@@ -300,6 +289,7 @@ impl Chip8 {
         let vy = self.registers[y as usize];
 
         self.registers[x as usize] = vx | vy;
+        self.registers[0xF] = 0;
     }
 
     // XOR vx, vy
@@ -308,6 +298,7 @@ impl Chip8 {
         let vy = self.registers[y as usize];
 
         self.registers[x as usize] = vx ^ vy;
+        self.registers[0xF] = 0;
     }
 
     // LD i, nnn
@@ -336,7 +327,7 @@ impl Chip8 {
         let nanoseconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .subsec_nanos() as u8;
+            .as_millis() as u8;
 
         self.registers[x as usize] = nanoseconds & kk;
     }
@@ -474,28 +465,38 @@ impl Chip8 {
 
     // print screen
     pub fn xdxyn(&mut self, x: u8, y: u8, n: u8) {
-        let x_pos = self.registers[x as usize] as usize % 64;
-        let y_pos = self.registers[y as usize] as usize % 32;
-        let height = n;
+        let x_pos = self.registers[x as usize] as usize % DISPLAY_WIDTH;
+        let y_pos = self.registers[y as usize] as usize % DISPLAY_HEIGHT;
+        let mut height = n % DISPLAY_HEIGHT as u8;
+
+        if height + y_pos as u8 > DISPLAY_HEIGHT as u8 - 1 {
+            height = height - ((height + y_pos as u8) - DISPLAY_HEIGHT as u8);
+        }
 
         self.registers[0xF] = 0;
 
         for row in 0..height as usize {
             // one byte represents 8 columns of pixels, hence the shifting below
             // ie, byte 7 represents 0000111 pixels
-            let sprite_byte = self.mem[self.index_register as usize + row as usize];
+            let mut sprite_byte = self.mem[self.index_register as usize + row as usize];
+
+            if x_pos + FULL_BYTE as usize > DISPLAY_WIDTH - 1 {
+                sprite_byte &= 0xFF << (x_pos + 8 - DISPLAY_WIDTH);
+            }
+
             for col in 0..8 {
                 let sprite_bit = sprite_byte & (0x80_u8 >> col);
 
-                let current_pixel_pointer =
-                    &mut self.display[(y_pos + row) * VIDEO_WIDTH + (x_pos + col)]; //% (VIDEO_WIDTH * VIDEO_HEIGHT)];
-
-                let current_pixel_is_on = current_pixel_pointer.to_owned() != 0;
+                // println!("{} * {} + {}", (y_pos + row), DISPLAY_WIDTH, (x_pos + col));
+                let current_pixel_pointer = &mut self.display[((y_pos + row) * DISPLAY_WIDTH
+                    + (x_pos + col))
+                    % (DISPLAY_WIDTH * DISPLAY_HEIGHT)];
 
                 if sprite_bit != 0 {
-                    if current_pixel_is_on {
+                    if *current_pixel_pointer != 0 {
                         self.registers[0xF] = 1;
                     }
+
                     *current_pixel_pointer ^= 0x01;
                 }
             }

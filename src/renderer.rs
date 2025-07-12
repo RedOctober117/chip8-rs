@@ -1,28 +1,34 @@
+use std::time::Duration;
+
 use sdl2::{
-    EventPump, Sdl, event::Event, keyboard::Keycode, pixels::Color, rect::Rect, render::Canvas,
+    EventPump, Sdl,
+    event::Event,
+    keyboard::Keycode,
+    pixels::Color,
+    rect::Rect,
+    render::Canvas,
+    ttf::{self, Sdl2TtfContext},
     video::Window,
 };
 
+use crate::chip8::{Chip8, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+
 pub struct Renderer {
+    emulator: Chip8,
     _context: Sdl,
     canvas: Canvas<Window>,
     event_pump: EventPump,
+    ttf: Sdl2TtfContext,
     pixel_size: u32,
-    video_width: u32,
-    video_height: u32,
 }
 
 impl Renderer {
-    pub fn init(pixel_size: u32, video_width: u32, video_height: u32) -> Self {
+    pub fn init(emu: Chip8, window_width: u32, window_height: u32, pixel_size: u32) -> Self {
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
 
         let window = video_subsystem
-            .window(
-                "Chip-8 Emulator",
-                pixel_size * video_width as u32,
-                pixel_size * video_height as u32,
-            )
+            .window("Chip-8 Emulator", window_width, window_height)
             .position_centered()
             .resizable()
             .build()
@@ -38,116 +44,162 @@ impl Renderer {
 
         canvas
             .set_logical_size(
-                pixel_size * video_width as u32,
-                pixel_size * video_height as u32,
+                pixel_size * DISPLAY_WIDTH as u32,
+                pixel_size * DISPLAY_HEIGHT as u32,
             )
             .unwrap();
 
+        let ttf = ttf::init().unwrap();
+
         Self {
+            emulator: emu,
             _context: sdl_context,
             canvas,
             event_pump,
+            ttf,
             pixel_size,
-            video_width,
-            video_height,
         }
     }
 
-    pub fn draw(&mut self, display: &[u8], keypad: &mut [u8; 17]) {
-        self.canvas.set_draw_color(Color::BLACK);
-        self.canvas.clear();
+    pub fn cycle(&mut self) {
+        let font = self.ttf.load_font("Px437_IBM_VGA_8x16.ttf", 16).unwrap();
+        let texture_creator = self.canvas.texture_creator();
 
-        for event in self.event_pump.poll_iter() {
-            match event {
-                Event::KeyDown {
-                    keycode: Some(Keycode::ESCAPE),
-                    ..
-                } => {
-                    keypad[16] = 1;
-                }
-                Event::KeyUp {
-                    keycode: Some(key), ..
-                }
-                | Event::KeyDown {
-                    keycode: Some(key), ..
-                } => match key {
-                    Keycode::A
-                    | Keycode::B
-                    | Keycode::C
-                    | Keycode::D
-                    | Keycode::E
-                    | Keycode::F
-                    | Keycode::Num0
-                    | Keycode::Num1
-                    | Keycode::Num2
-                    | Keycode::Num3
-                    | Keycode::Num4
-                    | Keycode::Num5
-                    | Keycode::Num6
-                    | Keycode::Num7
-                    | Keycode::Num8
-                    | Keycode::Num9 => {
-                        let hex_key = u8::from_str_radix(
-                            &char::from_u32(key.into_i32() as u32).unwrap().to_string(),
-                            16,
-                        )
-                        .unwrap();
-                        // println!("received {}", hex_key);
+        let mut debug_mode = false;
+        let mut fps_offset: f64 = 0_f64;
 
-                        match event {
-                            Event::KeyUp { .. } => keypad[hex_key as usize] = 0,
-                            Event::KeyDown { .. } => keypad[hex_key as usize] = 1,
-                            _ => {}
-                        }
+        'render_loop: loop {
+            if debug_mode {
+                self.emulator.debug_out();
+            }
+
+            let timer = self._context.timer().unwrap();
+            let start = timer.performance_counter();
+            self.emulator.cycle();
+
+            self.canvas.set_draw_color(Color::BLACK);
+            self.canvas.clear();
+
+            for event in self.event_pump.poll_iter() {
+                match event {
+                    Event::KeyDown {
+                        keycode: Some(Keycode::ESCAPE),
+                        ..
+                    } => {
+                        break 'render_loop;
                     }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::EQUALS),
+                        ..
+                    } => {
+                        fps_offset -= 1_f64;
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::MINUS),
+                        ..
+                    } => {
+                        fps_offset += 1_f64;
+                    }
+                    Event::KeyDown {
+                        keycode: Some(Keycode::BACKSPACE),
+                        ..
+                    } => debug_mode ^= true,
+                    Event::KeyUp {
+                        keycode: Some(key), ..
+                    }
+                    | Event::KeyDown {
+                        keycode: Some(key), ..
+                    } => match key {
+                        Keycode::A
+                        | Keycode::B
+                        | Keycode::C
+                        | Keycode::D
+                        | Keycode::E
+                        | Keycode::F
+                        | Keycode::Num0
+                        | Keycode::Num1
+                        | Keycode::Num2
+                        | Keycode::Num3
+                        | Keycode::Num4
+                        | Keycode::Num5
+                        | Keycode::Num6
+                        | Keycode::Num7
+                        | Keycode::Num8
+                        | Keycode::Num9 => {
+                            let hex_key = u8::from_str_radix(
+                                &char::from_u32(key.into_i32() as u32).unwrap().to_string(),
+                                16,
+                            )
+                            .unwrap();
+                            // println!("received {}", hex_key);
+
+                            match event {
+                                Event::KeyUp { .. } => self.emulator.key_up(hex_key),
+                                Event::KeyDown { .. } => self.emulator.key_down(hex_key),
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ => {}
+                }
             }
+
+            let mut col = 0;
+            let mut row = 0;
+
+            for pixel in self.emulator.get_display() {
+                if col == DISPLAY_WIDTH as usize {
+                    col = 0;
+                    row += 1;
+                }
+
+                self.canvas.set_draw_color(Color::BLACK);
+                if pixel != &0 {
+                    self.canvas.set_draw_color(Color::GREEN);
+                    self.canvas
+                        .fill_rect(Rect::new(
+                            self.pixel_size as i32 * col as i32,
+                            self.pixel_size as i32 * row as i32,
+                            self.pixel_size,
+                            self.pixel_size,
+                        ))
+                        .unwrap();
+                } else {
+                    self.canvas
+                        .fill_rect(Rect::new(
+                            self.pixel_size as i32 * col as i32,
+                            self.pixel_size as i32 * row as i32,
+                            self.pixel_size,
+                            self.pixel_size,
+                        ))
+                        .unwrap();
+                }
+                col += 1;
+            }
+
+            let mut end = timer.performance_counter();
+            let mut elapsed: f64 = (end - start) as f64 / timer.performance_frequency() as f64;
+
+            std::thread::sleep(Duration::from_millis(
+                ((16.666_f64 + fps_offset) - (elapsed * 1000_f64).floor()) as u64,
+            ));
+
+            end = timer.performance_counter();
+            elapsed = (end - start) as f64 / timer.performance_frequency() as f64;
+
+            let text = font
+                .render(&format!("FPS: {}", (1.0_f64 / elapsed) as u32))
+                .solid(Color::WHITE)
+                .unwrap();
+
+            let destination = Rect::new(0, 0, text.width(), text.height());
+            let text_texture = texture_creator.create_texture_from_surface(text).unwrap();
+
+            self.canvas.copy(&text_texture, None, destination).unwrap();
+            // println!("FPS: {}", 1.0_f64 / elapsed);
+
+            self.canvas.present();
         }
-
-        // game here
-
-        // let origin_x = WINDOW_WIDTH / self.video_width as u32 / 2;
-        // let origin_y = WINDOW_HEIGHT / self.video_height as u32 / 2;
-
-        let mut col = 0;
-        let mut row = 0;
-
-        for pixel in display {
-            if col == self.video_width as usize {
-                col = 0;
-                row += 1;
-            }
-            // if row == self.video_height as usize {
-            //     // row = 0;
-            // }
-
-            self.canvas.set_draw_color(Color::BLUE);
-            if pixel != &0 {
-                self.canvas.set_draw_color(Color::WHITE);
-                self.canvas
-                    .fill_rect(Rect::new(
-                        self.pixel_size as i32 * col as i32,
-                        self.pixel_size as i32 * row as i32,
-                        self.pixel_size,
-                        self.pixel_size,
-                    ))
-                    .unwrap();
-            } else {
-                self.canvas
-                    .fill_rect(Rect::new(
-                        self.pixel_size as i32 * col as i32,
-                        self.pixel_size as i32 * row as i32,
-                        self.pixel_size,
-                        self.pixel_size,
-                    ))
-                    .unwrap();
-            }
-            col += 1;
-        }
-
-        self.canvas.present();
-        // std::thread::sleep(Duration::new(0, 1_000_000u32 / 60));
     }
 }
